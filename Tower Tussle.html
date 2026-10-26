@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tower Tussle</title>
+<style>
+:root{color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:#14161f;color:#fff;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+#app{max-width:400px;margin:0 auto;padding:8px;user-select:none}
+#top{display:flex;justify-content:space-between;font-weight:700;padding:4px 6px;font-size:15px}
+canvas{width:100%;display:block;border-radius:10px;touch-action:manipulation}
+#bar{position:relative;height:22px;background:#2a2d3d;border-radius:11px;margin:8px 0;overflow:hidden}
+#fill{height:100%;width:50%;background:linear-gradient(90deg,#b13bd6,#e873ff)}
+#ex{position:absolute;inset:0;text-align:center;line-height:22px;font-size:13px}
+#hand{display:grid;grid-template-columns:repeat(4,1fr) 52px;gap:6px;align-items:end}
+.card{background:#2a2d3d;border:2px solid #3b3f55;border-radius:10px;padding:6px 0 4px;text-align:center;cursor:pointer;color:#fff;font:inherit}
+.card .e{font-size:28px;display:block}.card small{display:block;font-size:11px;opacity:.8}
+.card .c{display:inline-block;background:#b13bd6;border-radius:50%;width:20px;height:20px;line-height:20px;font-size:12px;font-weight:700;margin-top:2px}
+.card.no{opacity:.45}.card.sel{border-color:#ffd54a;transform:translateY(-5px)}
+#next{opacity:.7;text-align:center;font-size:10px}#next .card{padding:2px 0;transform:scale(.85)}
+#over{position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:5}
+#over[hidden]{display:none}#over h1{font-size:44px;margin:0}
+#over button{font:inherit;font-weight:700;padding:12px 28px;border:0;border-radius:10px;background:#ffd54a;color:#222;font-size:18px}
+</style></head><body>
+<div id="app">
+<div id="top"><span id="timer">3:00</span><span id="score">👑 0 – 0</span></div>
+<canvas id="c" width="360" height="560"></canvas>
+<div id="bar"><div id="fill"></div><b id="ex">5</b></div>
+<div id="hand"></div>
+</div>
+<div id="over" hidden><h1 id="ot"></h1><div id="os"></div><button id="again">Play again</button></div>
+<script>
+const $=id=>document.getElementById(id),cv=$('c'),g=cv.getContext('2d');
+const W=360,H=560,RY=280,BR=[75,285];
+const C={
+knight:{nm:'Knight',em:'🗡️',cost:3,hp:300,dmg:35,spd:40,rng:18,cd:1,num:1},
+archers:{nm:'Archers',em:'🏹',cost:3,hp:80,dmg:18,spd:40,rng:90,cd:.9,num:2},
+giant:{nm:'Giant',em:'🪨',cost:5,hp:850,dmg:55,spd:24,rng:18,cd:1.5,num:1,bld:1,big:1},
+imps:{nm:'Imps',em:'🦇',cost:2,hp:45,dmg:14,spd:75,rng:14,cd:.6,num:3},
+wizard:{nm:'Wizard',em:'🔮',cost:4,hp:120,dmg:45,spd:38,rng:80,cd:1.4,num:1,spl:30},
+bomber:{nm:'Bomber',em:'💣',cost:2,hp:75,dmg:40,spd:40,rng:70,cd:1.8,num:1,spl:26}};
+const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]]}return a};
+const mkT=(team,x,y,king)=>({team,x,y,king,hp:king?1500:900,max:king?1500:900,t:0,dead:false});
+let S,last=0;
+function reset(){
+ S={t:180,units:[],fx:[],el:[5,5],sel:null,over:false,ai:3,
+ tw:[mkT(1,75,110),mkT(1,285,110),mkT(1,180,45,1),mkT(0,75,450),mkT(0,285,450),mkT(0,180,515,1)]};
+ const d=shuffle(Object.keys(C));S.h=d.splice(0,4);S.q=d;buildHand();$('over').hidden=true}
+function buildHand(){
+ const el=$('hand');el.innerHTML='';
+ S.h.forEach((k,i)=>{const c=C[k],b=document.createElement('button');b.className='card';
+  b.innerHTML=`<span class="e">${c.em}</span><small>${c.nm}</small><span class="c">${c.cost}</span>`;
+  b.onclick=()=>{S.sel=S.sel===i?null:i};el.appendChild(b)});
+ const n=C[S.q[0]],d=document.createElement('div');d.id='next';
+ d.innerHTML=`<div>Next</div><div class="card"><span class="e" style="font-size:20px">${n.em}</span></div>`;el.appendChild(d)}
+function spawn(k,team,x,y){const c=C[k];
+ for(let i=0;i<c.num;i++)S.units.push({s:c,team,x:x+(i-(c.num-1)/2)*14,y:y+(i%2)*8,hp:c.hp,max:c.hp,t:.3})}
+const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+function hit(from,tg,dmg,spl){
+ tg.hp-=dmg;S.fx.push({x1:from.x,y1:from.y,x2:tg.x,y2:tg.y,l:.12,r:spl||0});
+ if(spl)for(const o of S.units)if(o!==tg&&o.team===tg.team&&dist(o,tg)<spl)o.hp-=dmg*.6}
+function end(win,why){S.over=true;$('ot').textContent=win===1?'Victory! 👑':win===0?'Defeat':'Draw';
+ $('ot').style.color=win===1?'#ffd54a':win===0?'#ff6b6b':'#fff';$('os').textContent=why;$('over').hidden=false}
+function crowns(team){return S.tw.filter(t=>t.team!==team&&t.dead).length}
+function update(dt){
+ S.t-=dt;const rate=S.t<60?2:1;
+ for(let i=0;i<2;i++)S.el[i]=Math.min(10,S.el[i]+dt/2.8*rate);
+ S.ai-=dt;
+ if(S.ai<=0){S.ai=1+Math.random()*1.5;
+  const ks=Object.keys(C).filter(k=>C[k].cost<=S.el[1]);
+  if(ks.length&&S.el[1]>=4.5+Math.random()*3){const k=ks[Math.random()*ks.length|0];
+   const x=Math.max(20,Math.min(340,BR[Math.random()<.5?0:1]+(Math.random()-.5)*50));
+   spawn(k,1,x,150+Math.random()*90);S.el[1]-=C[k].cost}}
+ for(const u of S.units){
+  u.t-=dt;let tg=null,best=u.s.bld?0:80;
+  if(!u.s.bld)for(const o of S.units)if(o.team!==u.team){const d=dist(u,o);if(d<best){best=d;tg=o}}
+  if(!tg){best=1e9;for(const t of S.tw)if(t.team!==u.team&&!t.dead){const d=dist(u,t);if(d<best){best=d;tg=t}}}
+  if(!tg)continue;
+  const isT=!tg.s,d=dist(u,tg);
+  if(d<=u.s.rng+(isT?22:8)){if(u.t<=0){u.t=u.s.cd;hit(u,tg,u.s.dmg,u.s.spl)}}
+  else{let wp=tg;
+   if((u.y-RY)*(tg.y-RY)<0){const bx=BR[Math.abs(u.x-BR[0])<Math.abs(u.x-BR[1])?0:1];wp={x:bx,y:RY};
+    if(dist(u,wp)<5)wp=tg}
+   const dd=dist(u,wp)||1;u.x+=(wp.x-u.x)/dd*u.s.spd*dt;u.y+=(wp.y-u.y)/dd*u.s.spd*dt}}
+ for(const u of S.units)for(const o of S.units)if(o!==u){
+  const d=dist(u,o);if(d<14&&d>0){const p=(14-d)*.25;u.x+=(u.x-o.x)/d*p;u.y+=(u.y-o.y)/d*p}}
+ for(const t of S.tw){if(t.dead)continue;t.t-=dt;
+  if(t.t<=0){let b=125,tg=null;
+   for(const u of S.units)if(u.team!==t.team){const d=dist(t,u);if(d<b){b=d;tg=u}}
+   if(tg){t.t=.9;hit(t,tg,45)}}}
+ S.units=S.units.filter(u=>u.hp>0);
+ for(const t of S.tw)if(!t.dead&&t.hp<=0){t.dead=true;
+  if(t.king){end(t.team===1?1:0,t.team===1?'You destroyed the enemy King!':'Your King fell.');return}}
+ for(const f of S.fx)f.l-=dt;S.fx=S.fx.filter(f=>f.l>0);
+ if(S.t<=0){S.t=0;const a=crowns(0),b=crowns(1);
+  if(a!==b)end(a>b?1:0,`Crowns ${a} – ${b}`);
+  else{const hp=m=>S.tw.filter(t=>t.team===m).reduce((s,t)=>s+Math.max(0,t.hp),0),x=hp(0),y=hp(1);
+   end(Math.abs(x-y)<1?.5:x>y?0:1,'Tower health decided it');}}}
+function draw(){
+ g.clearRect(0,0,W,H);
+ for(let i=0;i<14;i++){g.fillStyle=i%2?'#3f9150':'#47a058';g.fillRect(0,i*40,W,40)}
+ g.fillStyle='#3a88c8';g.fillRect(0,RY-14,W,28);
+ g.fillStyle='#8a6a3f';for(const x of BR)g.fillRect(x-22,RY-16,44,32);
+ g.fillStyle='rgba(255,255,255,.12)';for(const x of BR)g.fillRect(x-22,RY-4,44,2);
+ if(S.sel!=null){g.fillStyle='rgba(255,255,255,.14)';g.fillRect(0,RY+14,W,H-RY-14)}
+ g.textAlign='center';g.textBaseline='middle';
+ for(const t of S.tw){const w=t.king?50:40,h=t.king?44:36;
+  g.fillStyle=t.dead?'#555':t.team?'#a33':'#2a62c4';g.fillRect(t.x-w/2,t.y-h/2,w,h);
+  g.strokeStyle='rgba(0,0,0,.4)';g.strokeRect(t.x-w/2,t.y-h/2,w,h);
+  g.font=(t.king?26:20)+'px serif';g.fillText(t.dead?'💥':t.king?'👑':'🏰',t.x,t.y);
+  if(!t.dead)bar(t.x,t.y-h/2-7,w,t.hp/t.max,t.team)}
+ for(const f of S.fx){g.strokeStyle='#fff8b0';g.lineWidth=2;g.beginPath();g.moveTo(f.x1,f.y1);g.lineTo(f.x2,f.y2);g.stroke();
+  if(f.r){g.fillStyle='rgba(255,160,40,.35)';g.beginPath();g.arc(f.x2,f.y2,f.r,0,7);g.fill()}}
+ for(const u of S.units.slice().sort((a,b)=>a.y-b.y)){const r=u.s.big?14:10;
+  g.fillStyle='rgba(0,0,0,.25)';g.beginPath();g.arc(u.x,u.y+3,r,0,7);g.fill();
+  g.fillStyle=u.team?'#e5484d':'#3b82f6';g.beginPath();g.arc(u.x,u.y,r,0,7);g.fill();
+  g.strokeStyle='#fff';g.lineWidth=1.5;g.stroke();
+  g.font=(r+2)+'px serif';g.fillText(u.s.em,u.x,u.y+1);
+  if(u.hp<u.max)bar(u.x,u.y-r-5,22,u.hp/u.max,u.team)}}
+function bar(x,y,w,p,team){g.fillStyle='#000a';g.fillRect(x-w/2,y-2,w,4);
+ g.fillStyle=team?'#ff6b6b':'#5aa2ff';g.fillRect(x-w/2,y-2,w*Math.max(0,p),4)}
+function ui(){
+ const m=Math.floor(S.t/60),s=Math.floor(S.t%60);
+ $('timer').textContent=`${m}:${String(s).padStart(2,'0')}`+(S.t<60?' ⚡2x':'');
+ $('score').textContent=`👑 ${crowns(0)} – ${crowns(1)}`;
+ $('fill').style.width=S.el[0]*10+'%';$('ex').textContent=Math.floor(S.el[0]);
+ [...$('hand').querySelectorAll('.card')].slice(0,4).forEach((b,i)=>{
+  b.classList.toggle('no',C[S.h[i]].cost>S.el[0]);b.classList.toggle('sel',S.sel===i)})}
+cv.addEventListener('click',e=>{
+ if(S.over||S.sel==null)return;
+ const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)/r.width*W,y=(e.clientY-r.top)/r.height*H;
+ const k=S.h[S.sel],c=C[k];
+ if(y<RY+20||c.cost>S.el[0])return;
+ spawn(k,0,Math.max(15,Math.min(345,x)),Math.min(y,H-15));S.el[0]-=c.cost;
+ S.q.push(k);S.h[S.sel]=S.q.shift();S.sel=null;buildHand()});
+$('again').onclick=reset;
+function loop(ts){const dt=Math.min(.05,(ts-last)/1000||0);last=ts;
+ if(!S.over)update(dt);draw();ui();requestAnimationFrame(loop)}
+reset();requestAnimationFrame(loop);
+</script></body></html>
